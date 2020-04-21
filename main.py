@@ -16,11 +16,13 @@ TICKS_PER_SEC = 60
 # Size of sectors used to ease block loading.
 SECTOR_SIZE = 16
 
-WALKING_SPEED = 5
-FLYING_SPEED = 15
+WORLD_SIZE = 128
+
+WALKING_SPEED = 6
+FLYING_SPEED = 16
 
 GRAVITY = 20.0
-MAX_JUMP_HEIGHT = 1.0 # About the height of a block.
+MAX_JUMP_HEIGHT = 1.0  # About the height of a block.
 # To derive the formula for calculating jump speed, first solve
 #    v_t = v_0 + a * t
 # for the time at which you achieve maximum height, where a is the acceleration
@@ -33,20 +35,23 @@ TERMINAL_VELOCITY = 50
 
 PLAYER_HEIGHT = 2
 
+SPAWN_RADIUS = 4
+
 if sys.version_info[0] >= 3:
     xrange = range
+
 
 def cube_vertices(x, y, z, n):
     """ Return the vertices of the cube at position x, y, z with size 2*n.
 
     """
     return [
-        x-n,y+n,z-n, x-n,y+n,z+n, x+n,y+n,z+n, x+n,y+n,z-n,  # top
-        x-n,y-n,z-n, x+n,y-n,z-n, x+n,y-n,z+n, x-n,y-n,z+n,  # bottom
-        x-n,y-n,z-n, x-n,y-n,z+n, x-n,y+n,z+n, x-n,y+n,z-n,  # left
-        x+n,y-n,z+n, x+n,y-n,z-n, x+n,y+n,z-n, x+n,y+n,z+n,  # right
-        x-n,y-n,z+n, x+n,y-n,z+n, x+n,y+n,z+n, x-n,y+n,z+n,  # front
-        x+n,y-n,z-n, x-n,y-n,z-n, x-n,y+n,z-n, x+n,y+n,z-n,  # back
+        x - n, y + n, z - n, x - n, y + n, z + n, x + n, y + n, z + n, x + n, y + n, z - n,  # top
+        x - n, y - n, z - n, x + n, y - n, z - n, x + n, y - n, z + n, x - n, y - n, z + n,  # bottom
+        x - n, y - n, z - n, x - n, y - n, z + n, x - n, y + n, z + n, x - n, y + n, z - n,  # left
+        x + n, y - n, z + n, x + n, y - n, z - n, x + n, y + n, z - n, x + n, y + n, z + n,  # right
+        x - n, y - n, z + n, x + n, y - n, z + n, x + n, y + n, z + n, x - n, y + n, z + n,  # front
+        x + n, y - n, z - n, x - n, y - n, z - n, x - n, y + n, z - n, x + n, y + n, z - n,  # back
     ]
 
 
@@ -77,17 +82,44 @@ def tex_coords(top, bottom, side):
 TEXTURE_PATH = 'texture.png'
 
 GRASS = tex_coords((1, 0), (0, 1), (0, 0))
+DIRT = tex_coords((0, 1), (0, 1), (0, 1))
+STONE = tex_coords((2, 1), (2, 1), (2, 1))
 SAND = tex_coords((1, 1), (1, 1), (1, 1))
 BRICK = tex_coords((2, 0), (2, 0), (2, 0))
-STONE = tex_coords((2, 1), (2, 1), (2, 1))
+BORDER = tex_coords((0, 2), (0, 2), (0, 2))
+
+BLOCKS = (
+    GRASS,
+    DIRT,
+    STONE,
+    SAND,
+    BRICK,
+    BORDER
+)
+
+
+LAYERS = []
+
+
+def addLayer(block, num: int):
+    global LAYERS
+    for i in range(num):
+        LAYERS.append(block)
+
+
+addLayer(GRASS, 1)
+addLayer(DIRT, 3)
+addLayer(STONE, 10)
+addLayer(BORDER, 1)
+
 
 FACES = [
-    ( 0, 1, 0),
-    ( 0,-1, 0),
+    (0, 1, 0),
+    (0, -1, 0),
     (-1, 0, 0),
-    ( 1, 0, 0),
-    ( 0, 0, 1),
-    ( 0, 0,-1),
+    (1, 0, 0),
+    (0, 0, 1),
+    (0, 0, -1),
 ]
 
 
@@ -106,7 +138,7 @@ def normalize(position):
     """
     x, y, z = position
     x, y, z = (int(round(x)), int(round(y)), int(round(z)))
-    return (x, y, z)
+    return x, y, z
 
 
 def sectorize(position):
@@ -123,7 +155,7 @@ def sectorize(position):
     """
     x, y, z = normalize(position)
     x, y, z = x // SECTOR_SIZE, y // SECTOR_SIZE, z // SECTOR_SIZE
-    return (x, 0, z)
+    return x, 0, z
 
 
 class Model(object):
@@ -153,35 +185,38 @@ class Model(object):
         # _show_block() and _hide_block() calls
         self.queue = deque()
 
-        self._initialize()
+        self._generate_terrain()
 
-    def _initialize(self):
+    def _generate_terrain(self):
         """ Initialize the world by placing all the blocks.
-
         """
-        n = 80  # 1/2 width and height of world
+
+        n = int(WORLD_SIZE / 2)  # 1/2 width and height of world
         s = 1  # step size
-        y = 0  # initial y height
-        for x in xrange(-n, n + 1, s):
-            for z in xrange(-n, n + 1, s):
-                # create a layer stone an grass everywhere.
-                self.add_block((x, y - 2, z), GRASS, immediate=False)
-                self.add_block((x, y - 3, z), STONE, immediate=False)
-                if x in (-n, n) or z in (-n, n):
+        for y, layer in enumerate(LAYERS):
+            for x in xrange(-n, n + 1, s):
+                for z in xrange(-n, n + 1, s):
+                    # create a layer stone an grass everywhere.
+                    # self.add_block((x, y - 2, z), GRASS, immediate=False)
+                    # for i in range(3):
+                    #    self.add_block((x, y - i, z), DIRT, immediate=False)
+                    # self.add_block((x, y - 4, z), STONE, immediate=False)
+                    # if x in (-n, n) or z in (-n, n):
                     # create outer walls.
-                    for dy in xrange(-2, 3):
-                        self.add_block((x, y + dy, z), STONE, immediate=False)
+                    # for dy in xrange(-2, 3):
+                    #    self.add_block((x, y + dy, z), STONE, immediate=False)
+                    self.add_block((x, - y, z), layer, immediate=False)
 
         # generate the hills randomly
         o = n - 10
-        for _ in xrange(120):
+        for _ in xrange(0):
             a = random.randint(-o, o)  # x position of the hill
             b = random.randint(-o, o)  # z position of the hill
             c = -1  # base of the hill
             h = random.randint(1, 6)  # height of the hill
             s = random.randint(4, 8)  # 2 * s is the side length of the hill
             d = 1  # how quickly to taper off the hills
-            t = random.choice([GRASS, SAND, BRICK])
+            t = random.choice([GRASS, SAND])
             for y in xrange(c, c + h):
                 for x in xrange(a - s, a + s + 1):
                     for z in xrange(b - s, b + s + 1):
@@ -190,7 +225,7 @@ class Model(object):
                         if (x - 0) ** 2 + (z - 0) ** 2 < 5 ** 2:
                             continue
                         self.add_block((x, y, z), t, immediate=False)
-                s -= d  # decrement side lenth so hills taper off
+                s -= d  # decrement side length so hills taper off
 
     def hit_test(self, position, vector, max_distance=8):
         """ Line of sight search from current position. If a block is
@@ -327,8 +362,8 @@ class Model(object):
         # create vertex list
         # FIXME Maybe `add_indexed()` should be used instead
         self._shown[position] = self.batch.add(24, GL_QUADS, self.group,
-            ('v3f/static', vertex_data),
-            ('t2f/static', texture_data))
+                                               ('v3f/static', vertex_data),
+                                               ('t2f/static', texture_data))
 
     def hide_block(self, position, immediate=True):
         """ Hide the block at the given `position`. Hiding does not remove the
@@ -420,7 +455,7 @@ class Model(object):
 
         """
         start = time.clock()
-        while self.queue and time.clock() - start < 1.0 / TICKS_PER_SEC:
+        while self.queue and time.perf_counter() - start < 1.0 / TICKS_PER_SEC:
             self._dequeue()
 
     def process_entire_queue(self):
@@ -453,6 +488,7 @@ class Window(pyglet.window.Window):
         # Current (x, y, z) position in the world, specified with floats. Note
         # that, perhaps unlike in math class, the y-axis is the vertical axis.
         self.position = (0, 0, 0)
+        self.respawn()
 
         # First element is rotation of the player in the x-z plane (ground
         # plane) measured from the z-axis down. The second is the rotation
@@ -472,7 +508,7 @@ class Window(pyglet.window.Window):
         self.dy = 0
 
         # A list of blocks the player can place. Hit num keys to cycle.
-        self.inventory = [BRICK, GRASS, SAND]
+        self.inventory = BLOCKS
 
         # The current block the user can place. Hit num keys to cycle.
         self.block = self.inventory[0]
@@ -487,8 +523,8 @@ class Window(pyglet.window.Window):
 
         # The label that is displayed in the top left of the canvas.
         self.label = pyglet.text.Label('', font_name='Arial', font_size=18,
-            x=10, y=self.height - 10, anchor_x='left', anchor_y='top',
-            color=(0, 0, 0, 255))
+                                       x=10, y=self.height - 10, anchor_x='left', anchor_y='top',
+                                       color=(0, 0, 0, 255))
 
         # This call schedules the `update()` method to be called
         # TICKS_PER_SEC. This is the main game event loop.
@@ -550,13 +586,13 @@ class Window(pyglet.window.Window):
                 dz = math.sin(x_angle) * m
             else:
                 dy = 0.0
-                dx = math.cos(x_angle)
-                dz = math.sin(x_angle)
+            dx = math.cos(x_angle)
+            dz = math.sin(x_angle)
         else:
             dy = 0.0
             dx = 0.0
             dz = 0.0
-        return (dx, dy, dz)
+        return dx, dy, dz
 
     def update(self, dt):
         """ This method is scheduled to be called repeatedly by the pyglet
@@ -592,7 +628,7 @@ class Window(pyglet.window.Window):
         """
         # walking
         speed = FLYING_SPEED if self.flying else WALKING_SPEED
-        d = dt * speed # distance covered this tick.
+        d = dt * speed  # distance covered this tick.
         dx, dy, dz = self.get_motion_vector()
         # New position in space, before accounting for gravity.
         dx, dy, dz = dx * d, dy * d, dz * d
@@ -608,6 +644,9 @@ class Window(pyglet.window.Window):
         x, y, z = self.position
         x, y, z = self.collide((x + dx, y + dy, z + dz), PLAYER_HEIGHT)
         self.position = (x, y, z)
+
+        if y < -40:
+            self.respawn()
 
     def collide(self, position, height):
         """ Checks to see if the player at the given `position` and `height`
@@ -675,15 +714,16 @@ class Window(pyglet.window.Window):
         if self.exclusive:
             vector = self.get_sight_vector()
             block, previous = self.model.hit_test(self.position, vector)
-            if (button == mouse.RIGHT) or \
-                    ((button == mouse.LEFT) and (modifiers & key.MOD_CTRL)):
+            texture = self.model.world[block]
+            if (button == mouse.RIGHT) or (button == mouse.LEFT and modifiers & key.MOD_CTRL):
                 # ON OSX, control + left click = right click.
                 if previous:
                     self.model.add_block(previous, self.block)
             elif button == pyglet.window.mouse.LEFT and block:
-                texture = self.model.world[block]
-                if texture != STONE:
+                if texture != BORDER:
                     self.model.remove_block(block)
+            elif button == pyglet.window.mouse.MIDDLE and block:
+                self.block = self.inventory[BLOCKS.index(texture)]
         else:
             self.set_exclusive_mouse(True)
 
@@ -705,6 +745,9 @@ class Window(pyglet.window.Window):
             x, y = x + dx * m, y + dy * m
             y = max(-90, min(90, y))
             self.rotation = (x, y)
+
+    def on_mouse_scroll(self, x, y, scroll_x, scroll_y):
+        self.block = self.inventory[int(scroll_y) + self.inventory.index(self.block)]
 
     def on_key_press(self, symbol, modifiers):
         """ Called when the player presses a key. See pyglet docs for key
@@ -736,6 +779,8 @@ class Window(pyglet.window.Window):
         elif symbol in self.num_keys:
             index = (symbol - self.num_keys[0]) % len(self.inventory)
             self.block = self.inventory[index]
+        elif symbol == key.R:
+            self.respawn()
 
     def on_key_release(self, symbol, modifiers):
         """ Called when the player releases a key. See pyglet docs for key
@@ -770,8 +815,8 @@ class Window(pyglet.window.Window):
         x, y = self.width // 2, self.height // 2
         n = 10
         self.reticle = pyglet.graphics.vertex_list(4,
-            ('v2i', (x - n, y, x + n, y, x, y - n, x, y + n))
-        )
+                                                   ('v2i', (x - n, y, x + n, y, x, y - n, x, y + n))
+                                                   )
 
     def set_2d(self):
         """ Configure OpenGL to draw in 2d.
@@ -797,7 +842,7 @@ class Window(pyglet.window.Window):
         glViewport(0, 0, max(1, viewport[0]), max(1, viewport[1]))
         glMatrixMode(GL_PROJECTION)
         glLoadIdentity()
-        gluPerspective(65.0, width / float(height), 0.1, 60.0)
+        gluPerspective(70.0, width / float(height), 0.1, 60.0)
         glMatrixMode(GL_MODELVIEW)
         glLoadIdentity()
         x, y = self.rotation
@@ -851,6 +896,10 @@ class Window(pyglet.window.Window):
         glColor3d(0, 0, 0)
         self.reticle.draw(GL_LINES)
 
+    def respawn(self):
+        pos = random.randint(SPAWN_RADIUS, SPAWN_RADIUS), 4, random.randint(-SPAWN_RADIUS, SPAWN_RADIUS),
+        self.position = pos
+
 
 def setup_fog():
     """ Configure the OpenGL fog properties.
@@ -891,7 +940,7 @@ def setup():
 
 
 def main():
-    window = Window(width=800, height=600, caption='Pyglet', resizable=True)
+    window = Window(width=1000, height=800, caption='Pyglet', resizable=True)
     # Hide the mouse cursor and prevent the mouse from leaving the window.
     window.set_exclusive_mouse(True)
     setup()
